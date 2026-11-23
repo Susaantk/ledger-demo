@@ -64,6 +64,8 @@ class LedgerService:
         """Returns total spending grouped by category."""
         totals: dict[str, Decimal] = {}
         for tx in self._transactions:
+            if tx.kind != "expense":
+                continue
             totals[tx.category] = (totals.get(tx.category, Decimal("0.00")) + tx.amount).quantize(_CENT)
         return totals
 

@@ -35,6 +35,15 @@ def test_spending_by_category_for_expenses():
     assert svc.spending_by_category() == {"food": Decimal("35.25"), "books": Decimal("30.00")}
 
 
+def test_spending_by_category_excludes_income():
+    svc = LedgerService()
+    svc.add_transaction(occurred_on=date(2026, 11, 1), category="salary", amount="3000.00", kind="income", description="Paycheck")
+    svc.add_transaction(occurred_on=date(2026, 11, 2), category="food", amount="40.00", kind="expense", description="Groceries")
+    svc.add_transaction(occurred_on=date(2026, 11, 3), category="food", amount="10.00", kind="income", description="Grocery refund")
+    svc.add_transaction(occurred_on=date(2026, 11, 4), category="books", amount="25.50", kind="expense", description="Novel")
+    assert svc.spending_by_category() == {"food": Decimal("40.00"), "books": Decimal("25.50")}
+
+
 def test_budget_status_tracks_monthly_spending():
     svc = LedgerService()
     svc.set_budget("food", "100.00")
