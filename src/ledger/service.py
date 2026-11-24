@@ -136,6 +136,42 @@ class LedgerService:
             over_budget=spent > limit,
         )
 
+    def filter_transactions(
+        self,
+        *,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        category: str | None = None,
+        kind: TransactionKind | None = None,
+        min_amount: Decimal | str | None = None,
+        max_amount: Decimal | str | None = None,
+    ) -> list[Transaction]:
+        """Filters transactions by optional inclusive bounds, category, and kind."""
+        if start_date is not None and end_date is not None and start_date > end_date:
+            raise ValueError("start_date must be less than or equal to end_date")
+        min_val = Decimal(min_amount) if min_amount is not None else None
+        max_val = Decimal(max_amount) if max_amount is not None else None
+        if min_val is not None and max_val is not None and min_val > max_val:
+            raise ValueError("min_amount must be less than or equal to max_amount")
+
+        clean_category = category.strip().lower() if category is not None else None
+        results: list[Transaction] = []
+        for tx in self._transactions:
+            if start_date is not None and tx.occurred_on < start_date:
+                continue
+            if end_date is not None and tx.occurred_on > end_date:
+                continue
+            if clean_category is not None and tx.category.strip().lower() != clean_category:
+                continue
+            if kind is not None and tx.kind != kind:
+                continue
+            if min_val is not None and tx.amount < min_val:
+                continue
+            if max_val is not None and tx.amount > max_val:
+                continue
+            results.append(tx)
+        return results
+
     def search(self, query: str) -> list[Transaction]:
         """Case-insensitive substring search over category and description."""
         needle = query.strip().lower()

@@ -130,3 +130,77 @@ def test_monthly_summary_empty_month():
     assert summary.total_income.as_tuple().exponent == -2
     assert summary.total_expenses.as_tuple().exponent == -2
     assert summary.net.as_tuple().exponent == -2
+
+
+def test_filter_transactions_single_filters_and_insertion_order():
+    svc = LedgerService()
+    # Intentionally add transactions out of chronological order to verify insertion order preservation.
+    t1 = svc.add_transaction(occurred_on=date(2026, 11, 10), category="Food", amount="50.00", kind="expense", description="Dinner")
+    t2 = svc.add_transaction(occurred_on=date(2026, 11, 1), category="Salary", amount="3000.00", kind="income", description="Paycheck")
+    t3 = svc.add_transaction(occurred_on=date(2026, 11, 15), category="food", amount="20.00", kind="expense", description="Lunch")
+    t4 = svc.add_transaction(occurred_on=date(2026, 11, 5), category="Transport", amount="20.00", kind="expense", description="Pass")
+    t5 = svc.add_transaction(occurred_on=date(2026, 11, 10), category="Food", amount="10.00", kind="income", description="Refund")
+
+    assert svc.filter_transactions() == [t1, t2, t3, t4, t5]
+
+    # Date bounds (inclusive) and insertion order preserved.
+    assert svc.filter_transactions(start_date=date(2026, 11, 10)) == [t1, t3, t5]
+    assert svc.filter_transactions(end_date=date(2026, 11, 5)) == [t2, t4]
+    assert svc.filter_transactions(start_date=date(2026, 11, 10), end_date=date(2026, 11, 10)) == [t1, t5]
+
+    # Category filter is case-insensitive, trimmed, and exact (not substring).
+    assert svc.filter_transactions(category="  FoOd  ") == [t1, t3, t5]
+    assert svc.filter_transactions(category="foo") == []
+
+    # Kind filter.
+    assert svc.filter_transactions(kind="income") == [t2, t5]
+    assert svc.filter_transactions(kind="expense") == [t1, t3, t4]
+
+    # Amount bounds (inclusive) with both Decimal and str.
+    assert svc.filter_transactions(min_amount=Decimal("50.00")) == [t1, t2]
+    assert svc.filter_transactions(max_amount="20.00") == [t3, t4, t5]
+    assert svc.filter_transactions(min_amount="20.00", max_amount=Decimal("20.00")) == [t3, t4]
+
+
+def test_filter_transactions_combined_and_empty_matches():
+    svc = LedgerService(
+        transactions=[
+            Transaction(id="tx-0001", occurred_on=date(2026, 11, 3), category="  Food ", amount=Decimal("25.00"), kind="expense"),
+        ]
+    )
+    t1 = svc.transactions[0]
+    t2 = svc.add_transaction(occurred_on=date(2026, 11, 6), category="food", amount="45.00", kind="expense")
+    svc.add_transaction(occurred_on=date(2026, 11, 6), category="food", amount="45.00", kind="income")
+    svc.add_transaction(occurred_on=date(2026, 11, 8), category="food", amount="80.00", kind="expense")
+    svc.add_transaction(occurred_on=date(2026, 11, 6), category="books", amount="35.00", kind="expense")
+
+    matched = svc.filter_transactions(
+        start_date=date(2026, 11, 3),
+        end_date=date(2026, 11, 7),
+        category="FOOD",
+        kind="expense",
+        min_amount="25.00",
+        max_amount=Decimal("50.00"),
+    )
+    assert matched == [t1, t2]
+
+    # Non-matching combinations and empty service.
+    assert svc.filter_transactions(start_date=date(2026, 12, 1)) == []
+    assert svc.filter_transactions(category="travel") == []
+    assert svc.filter_transactions(category="books", kind="income") == []
+    assert svc.filter_transactions(min_amount="100.00") == []
+    assert LedgerService().filter_transactions(category="food") == []
+
+
+def test_filter_transactions_invalid_bounds():
+    svc = LedgerService()
+    svc.add_transaction(occurred_on=date(2026, 11, 5), category="food", amount="25.00")
+
+    with pytest.raises(ValueError):
+        svc.filter_transactions(start_date=date(2026, 11, 10), end_date=date(2026, 11, 9))
+
+    with pytest.raises(ValueError):
+        svc.filter_transactions(min_amount=Decimal("50.00"), max_amount=Decimal("25.00"))
+
+    with pytest.raises(ValueError):
+        svc.filter_transactions(min_amount="100.00", max_amount="20.00")
