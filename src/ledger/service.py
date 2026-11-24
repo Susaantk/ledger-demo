@@ -7,7 +7,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Iterable
 
-from .models import Budget, BudgetStatus, Transaction, TransactionKind
+from .models import Budget, BudgetStatus, MonthlySummary, Transaction, TransactionKind
 
 _CENT = Decimal("0.01")
 
@@ -68,6 +68,37 @@ class LedgerService:
                 continue
             totals[tx.category] = (totals.get(tx.category, Decimal("0.00")) + tx.amount).quantize(_CENT)
         return totals
+
+    def monthly_summary(self, year: int, month: int) -> MonthlySummary:
+        """Returns income, expense, net, and category-level expense totals for a given month."""
+        total_income = Decimal("0.00")
+        total_expenses = Decimal("0.00")
+        raw_expenses_by_category: dict[str, Decimal] = {}
+        for tx in self._transactions:
+            if tx.occurred_on.year != year or tx.occurred_on.month != month:
+                continue
+            if tx.kind == "income":
+                total_income += tx.amount
+            elif tx.kind == "expense":
+                total_expenses += tx.amount
+                raw_expenses_by_category[tx.category] = (
+                    raw_expenses_by_category.get(tx.category, Decimal("0.00")) + tx.amount
+                )
+        quantized_income = total_income.quantize(_CENT)
+        quantized_expenses = total_expenses.quantize(_CENT)
+        net = (quantized_income - quantized_expenses).quantize(_CENT)
+        expenses_by_category = {
+            category: amount.quantize(_CENT)
+            for category, amount in raw_expenses_by_category.items()
+        }
+        return MonthlySummary(
+            year=year,
+            month=month,
+            total_income=quantized_income,
+            total_expenses=quantized_expenses,
+            net=net,
+            expenses_by_category=expenses_by_category,
+        )
 
     def set_budget(self, category: str, monthly_limit: Decimal | str | int | float) -> Budget:
         limit = Decimal(str(monthly_limit)).quantize(_CENT)
