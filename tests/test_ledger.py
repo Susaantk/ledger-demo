@@ -1,6 +1,8 @@
 """Unit tests for ledger-demo."""
 from __future__ import annotations
 
+import csv
+import io
 from dataclasses import FrozenInstanceError
 from datetime import date
 from decimal import Decimal
@@ -69,6 +71,83 @@ def test_search_and_export_csv():
 
     csv_text = svc.export_csv()
     assert "tx-0001,2026-11-01,coffee,expense,5.75,Morning latte" in csv_text
+
+
+def test_export_csv_sanitizes_formula_cells():
+    svc = LedgerService()
+    svc.add_transaction(occurred_on=date(2026, 11, 1), category="=cmd", amount="10.00", description="=SUM(A1:A2)")
+    svc.add_transaction(occurred_on=date(2026, 11, 2), category="+bonus", amount="20.00", description="+1+2")
+    svc.add_transaction(occurred_on=date(2026, 11, 3), category="-refund", amount="30.00", description="-100")
+    svc.add_transaction(occurred_on=date(2026, 11, 4), category="@handle", amount="40.00", description="@SUM(1,2)")
+    svc.add_transaction(occurred_on=date(2026, 11, 5), category="groceries", amount="50.00", description="Milk and bread (a=b)")
+    svc.add_transaction(occurred_on=date(2026, 11, 6), category="books", amount="15.00", description="")
+
+    rows = list(csv.reader(io.StringIO(svc.export_csv())))
+    assert rows == [
+        ["id", "occurred_on", "category", "kind", "amount", "description"],
+        ["tx-0001", "2026-11-01", "'=cmd", "expense", "10.00", "'=SUM(A1:A2)"],
+        ["tx-0002", "2026-11-02", "'+bonus", "expense", "20.00", "'+1+2"],
+        ["tx-0003", "2026-11-03", "'-refund", "expense", "30.00", "'-100"],
+        ["tx-0004", "2026-11-04", "'@handle", "expense", "40.00", "'@SUM(1,2)"],
+        ["tx-0005", "2026-11-05", "groceries", "expense", "50.00", "Milk and bread (a=b)"],
+        ["tx-0006", "2026-11-06", "books", "expense", "15.00", ""],
+    ]
+
+
+def test_export_csv_to_dir_writes_valid_file(tmp_path: Path):
+    svc = LedgerService()
+    svc.add_transaction(occurred_on=date(2026, 11, 1), category="food", amount="12.50", description="=1+1")
+    base_dir = tmp_path / "exports"
+
+    out_path = svc.export_csv_to_dir(base_dir, "report.csv")
+    assert out_path == (base_dir / "report.csv").resolve()
+    assert out_path.is_file()
+    with out_path.open("r", encoding="utf-8", newline="") as handle:
+        assert handle.read() == svc.export_csv()
+
+    nested_path = svc.export_csv_to_dir(base_dir, "2026/nov/report.csv")
+    assert nested_path == (base_dir / "2026" / "nov" / "report.csv").resolve()
+    assert nested_path.is_file()
+    with nested_path.open("r", encoding="utf-8", newline="") as handle:
+        assert handle.read() == svc.export_csv()
+
+
+def test_export_csv_to_dir_rejects_path_traversal(tmp_path: Path):
+    svc = LedgerService()
+    svc.add_transaction(occurred_on=date(2026, 11, 1), category="food", amount="12.50", description="Lunch")
+    base_dir = tmp_path / "exports"
+    base_dir.mkdir()
+
+    with pytest.raises(ValueError):
+        svc.export_csv_to_dir(base_dir, "../escape.csv")
+    assert not (tmp_path / "escape.csv").exists()
+
+    with pytest.raises(ValueError):
+        svc.export_csv_to_dir(base_dir, "sub/../../escape.csv")
+    assert not (tmp_path / "escape.csv").exists()
+    assert not (base_dir / "sub").exists()
+
+    with pytest.raises(ValueError):
+        svc.export_csv_to_dir(base_dir, "sub/../ok.csv")
+    assert not (base_dir / "sub").exists()
+    assert not (base_dir / "ok.csv").exists()
+
+    abs_target = tmp_path / "abs.csv"
+    with pytest.raises(ValueError):
+        svc.export_csv_to_dir(base_dir, str(abs_target))
+    assert not abs_target.exists()
+
+    for bad_name in ("", "   ", "."):
+        with pytest.raises(ValueError):
+            svc.export_csv_to_dir(base_dir, bad_name)
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = base_dir / "link"
+    link.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError):
+        svc.export_csv_to_dir(base_dir, "link/escape.csv")
+    assert not (outside / "escape.csv").exists()
 
 
 def test_store_round_trip(tmp_path: Path):
