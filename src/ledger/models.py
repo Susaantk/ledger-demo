@@ -32,3 +32,13 @@ class BudgetStatus:
     spent: Decimal
     remaining: Decimal
     over_budget: bool
+
+
+@dataclass(frozen=True)
+class MonthlySummary:
+    year: int
+    month: int
+    total_income: Decimal
+    total_expenses: Decimal
+    net: Decimal
+    expenses_by_category: dict[str, Decimal]
