@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from ledger import LedgerService, MonthlySummary, Transaction
+from ledger import BudgetStatus, LedgerService, MonthlySummary, Transaction
 from ledger.store import load_transactions, save_transactions
 
 
@@ -130,3 +130,83 @@ def test_monthly_summary_empty_month():
     assert summary.total_income.as_tuple().exponent == -2
     assert summary.total_expenses.as_tuple().exponent == -2
     assert summary.net.as_tuple().exponent == -2
+
+
+def test_all_budget_statuses_empty():
+    svc = LedgerService()
+    assert svc.all_budget_statuses(2026, 11) == []
+
+
+def test_all_budget_statuses_sorted_alphabetically():
+    svc = LedgerService()
+    svc.set_budget("utilities", "200.00")
+    svc.set_budget("food", "100.00")
+    svc.set_budget("books", "50.00")
+    svc.add_transaction(occurred_on=date(2026, 11, 2), category="food", amount="40.00")
+    svc.add_transaction(occurred_on=date(2026, 11, 3), category="food", amount="10.00", kind="income")
+    svc.add_transaction(occurred_on=date(2026, 10, 15), category="books", amount="50.00")
+    svc.add_transaction(occurred_on=date(2026, 11, 10), category="utilities", amount="220.00")
+
+    statuses = svc.all_budget_statuses(2026, 11)
+    assert statuses == [
+        BudgetStatus(
+            category="books",
+            limit=Decimal("50.00"),
+            spent=Decimal("0.00"),
+            remaining=Decimal("50.00"),
+            over_budget=False,
+        ),
+        BudgetStatus(
+            category="food",
+            limit=Decimal("100.00"),
+            spent=Decimal("40.00"),
+            remaining=Decimal("60.00"),
+            over_budget=False,
+        ),
+        BudgetStatus(
+            category="utilities",
+            limit=Decimal("200.00"),
+            spent=Decimal("220.00"),
+            remaining=Decimal("-20.00"),
+            over_budget=True,
+        ),
+    ]
+
+
+def test_near_limit_budgets_default_and_custom_thresholds():
+    svc = LedgerService()
+    svc.set_budget("travel", "100.00")
+    svc.set_budget("food", "100.00")
+    svc.set_budget("books", "100.00")
+    svc.set_budget("coffee", "33.33")
+
+    # Under default 80% threshold
+    svc.add_transaction(occurred_on=date(2026, 11, 1), category="travel", amount="79.99")
+    # Exact 80% threshold
+    svc.add_transaction(occurred_on=date(2026, 11, 2), category="food", amount="80.00")
+    # Over budget
+    svc.add_transaction(occurred_on=date(2026, 11, 3), category="books", amount="115.00")
+    # Exact Decimal precision check: 33.33 * 80 / 100 = 26.664 > 26.66
+    svc.add_transaction(occurred_on=date(2026, 11, 4), category="coffee", amount="26.66")
+    # Different month should not count
+    svc.add_transaction(occurred_on=date(2026, 10, 20), category="travel", amount="50.00")
+
+    default_near = svc.near_limit_budgets(2026, 11)
+    assert [s.category for s in default_near] == ["books", "food"]
+
+    custom_50 = svc.near_limit_budgets(2026, 11, threshold_percent=50)
+    assert [s.category for s in custom_50] == ["books", "coffee", "food", "travel"]
+
+    custom_100 = svc.near_limit_budgets(2026, 11, threshold_percent=100)
+    assert [s.category for s in custom_100] == ["books"]
+
+    custom_1 = svc.near_limit_budgets(2026, 11, threshold_percent=1)
+    assert [s.category for s in custom_1] == ["books", "coffee", "food", "travel"]
+
+
+@pytest.mark.parametrize("bad_threshold", [0, -1, -100, 101, 150, True, False, 80.5])
+def test_near_limit_budgets_invalid_threshold(bad_threshold):
+    svc = LedgerService()
+    svc.set_budget("food", "100.00")
+    with pytest.raises(ValueError, match="threshold_percent"):
+        svc.near_limit_budgets(2026, 11, threshold_percent=bad_threshold)
