@@ -130,3 +130,88 @@ def test_monthly_summary_empty_month():
     assert summary.total_income.as_tuple().exponent == -2
     assert summary.total_expenses.as_tuple().exponent == -2
     assert summary.net.as_tuple().exponent == -2
+
+
+def test_filter_expression_amount_threshold():
+    svc = LedgerService()
+    tx1 = svc.add_transaction(occurred_on=date(2026, 11, 1), category="coffee", amount="5.75", description="Latte")
+    tx2 = svc.add_transaction(occurred_on=date(2026, 11, 2), category="food", amount="10.00", description="Lunch")
+    tx3 = svc.add_transaction(occurred_on=date(2026, 11, 3), category="books", amount="22.50", description="Handbook")
+
+    assert svc.filter_expression("tx.amount > 10") == [tx3]
+    assert svc.filter_expression("tx.amount >= 10") == [tx2, tx3]
+    assert svc.filter_expression("tx.amount < 10") == [tx1]
+
+
+def test_filter_expression_compound_and_attribute_filters():
+    svc = LedgerService()
+    tx1 = svc.add_transaction(occurred_on=date(2026, 10, 15), category="food", amount="12.50", description="Dinner")
+    tx2 = svc.add_transaction(occurred_on=date(2026, 11, 1), category="salary", amount="3000.00", kind="income", description="Paycheck")
+    tx3 = svc.add_transaction(occurred_on=date(2026, 11, 5), category="food", amount="45.00", description="Weekly groceries")
+    tx4 = svc.add_transaction(occurred_on=date(2026, 11, 12), category="books", amount="18.00", description="Python guide")
+
+    assert svc.filter_expression("tx.kind == 'expense' and tx.occurred_on.month == 11") == [tx3, tx4]
+    assert svc.filter_expression("tx.occurred_on.year == 2026 and tx.occurred_on.day >= 10") == [tx1, tx4]
+    assert svc.filter_expression("tx.category in ('food', 'books') and 15 <= tx.amount <= 50") == [tx3, tx4]
+    assert svc.filter_expression("not (tx.kind == 'income') and 'groceries' in tx.description") == [tx3]
+    assert svc.filter_expression("tx.id == 'tx-0002' or tx.category in {'books'}") == [tx2, tx4]
+    assert svc.filter_expression("tx.amount * 2 + 5 > 40 and tx.kind != 'income'") == [tx3, tx4]
+    assert svc.filter_expression("-tx.amount < -20 and tx.category not in ['salary']") == [tx3]
+
+
+@pytest.mark.parametrize(
+    "bad_expr",
+    [
+        "",
+        "   ",
+        "tx.amount >",
+        "import os",
+        "tx.amount > 10; import os",
+        "__import__('os').system('echo hi')",
+        "eval('1 + 1')",
+        "exec('x = 1')",
+        "open('/etc/passwd')",
+        "len(tx.category) > 2",
+        "tx.category.lower() == 'food'",
+        "tx.occurred_on.isoformat() == '2026-11-01'",
+        "tx.occurred_on.isoformat",
+        "amount > 10",
+        "__builtins__",
+        "tx.__class__",
+        "tx.__dict__",
+        "tx.amount.__class__",
+        "tx.occurred_on.__class__",
+        "tx.nonexistent == 1",
+        "'a'.__class__",
+        "[c for c in tx.category]",
+        "(lambda x: x)(tx)",
+        "(x := 1)",
+        "f'{tx.category}'",
+        "tx.amount ** 2 > 10",
+        "tx.category[0] == 'f'",
+        "{**{'a': 1}}",
+    ],
+)
+def test_filter_expression_rejects_unsafe_and_malformed(bad_expr: str):
+    empty_svc = LedgerService()
+    populated_svc = LedgerService()
+    populated_svc.add_transaction(occurred_on=date(2026, 11, 1), category="food", amount="20.00", description="Lunch")
+
+    with pytest.raises(ValueError):
+        empty_svc.filter_expression(bad_expr)
+    with pytest.raises(ValueError):
+        populated_svc.filter_expression(bad_expr)
+
+
+def test_filter_expression_rejects_runtime_invalid_operations():
+    svc = LedgerService()
+    svc.add_transaction(occurred_on=date(2026, 11, 1), category="food", amount="20.00")
+
+    with pytest.raises(ValueError):
+        svc.filter_expression("tx.amount / 0 > 1")
+    with pytest.raises(ValueError):
+        svc.filter_expression("tx.category > 10")
+    with pytest.raises(ValueError):
+        svc.filter_expression("'a' * 1000000000")
+    with pytest.raises(ValueError):
+        svc.filter_expression("'%999999999s' % tx.category")
