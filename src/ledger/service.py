@@ -136,6 +136,30 @@ class LedgerService:
             over_budget=spent > limit,
         )
 
+    def all_budget_statuses(self, year: int, month: int) -> list[BudgetStatus]:
+        """Returns budget statuses for all configured budgets, sorted alphabetically by category."""
+        return [self.budget_status(category, year, month) for category in sorted(self._budgets)]
+
+    def near_limit_budgets(
+        self,
+        year: int,
+        month: int,
+        *,
+        threshold_percent: int = 80,
+    ) -> list[BudgetStatus]:
+        """Returns budgets whose spending is at or above threshold_percent of their limit."""
+        if (
+            isinstance(threshold_percent, bool)
+            or not isinstance(threshold_percent, int)
+            or not (1 <= threshold_percent <= 100)
+        ):
+            raise ValueError("threshold_percent must be an integer between 1 and 100")
+        return [
+            status
+            for status in self.all_budget_statuses(year, month)
+            if status.spent >= status.limit * Decimal(threshold_percent) / Decimal(100)
+        ]
+
     def search(self, query: str) -> list[Transaction]:
         """Case-insensitive substring search over category and description."""
         needle = query.strip().lower()
