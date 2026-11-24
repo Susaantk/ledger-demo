@@ -5,11 +5,20 @@ import csv
 import io
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from typing import Iterable
 
 from .models import Budget, BudgetStatus, MonthlySummary, Transaction, TransactionKind
 
 _CENT = Decimal("0.01")
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@")
+
+
+def _sanitize_csv_cell(value: str) -> str:
+    """Prefixes leading spreadsheet formula trigger characters with a single quote."""
+    if value.startswith(_CSV_FORMULA_PREFIXES):
+        return f"'{value}"
+    return value
 
 
 class LedgerService:
@@ -153,5 +162,33 @@ class LedgerService:
         writer = csv.writer(buffer)
         writer.writerow(["id", "occurred_on", "category", "kind", "amount", "description"])
         for tx in self._transactions:
-            writer.writerow([tx.id, tx.occurred_on.isoformat(), tx.category, tx.kind, str(tx.amount), tx.description])
+            writer.writerow(
+                [
+                    tx.id,
+                    tx.occurred_on.isoformat(),
+                    _sanitize_csv_cell(tx.category),
+                    tx.kind,
+                    str(tx.amount),
+                    _sanitize_csv_cell(tx.description),
+                ]
+            )
         return buffer.getvalue()
+
+    def export_csv_to_dir(self, base_dir: Path, filename: str) -> Path:
+        """Writes exported CSV into base_dir after rejecting path traversal attempts."""
+        if not filename or not filename.strip():
+            raise ValueError("filename must be non-empty")
+        if "\x00" in filename:
+            raise ValueError("filename must not contain null bytes")
+        rel_path = Path(filename)
+        if rel_path.is_absolute():
+            raise ValueError("filename must be a relative path")
+        if ".." in rel_path.parts:
+            raise ValueError("filename must not contain path traversal segments")
+        base_path = Path(base_dir).resolve()
+        target = (base_path / rel_path).resolve()
+        if target == base_path or not target.is_relative_to(base_path):
+            raise ValueError("filename escapes base_dir")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(self.export_csv(), encoding="utf-8", newline="")
+        return target
